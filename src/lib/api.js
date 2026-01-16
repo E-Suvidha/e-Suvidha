@@ -49,3 +49,89 @@ export async function authenticatedApiCall(path, options = {}, token) {
   
   return response.json();
 }
+
+/**
+ * Fetch agent recommendations with hybrid scoring
+ * 
+ * THINKING PHASE: Backend computes preference boost from memory
+ * ACTION PHASE: Returns ranked tenders with agent metadata
+ */
+export async function getAgentRecommendations(token) {
+  try {
+    const url = api('recommendations');
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      console.warn(`Failed to fetch agent recommendations: ${response.status}`);
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching agent recommendations:', error);
+    return null;
+  }
+}
+
+/**
+ * Fetch agent memory profile for current user
+ * Shows which categories/skills agent has learned
+ */
+export async function getAgentMemory(token) {
+  try {
+    const url = api('agent-memory');
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      console.warn(`Failed to fetch agent memory: ${response.status}`);
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error fetching agent memory:', error);
+    return null;
+  }
+}
+
+/**
+ * Submit feedback on a recommendation
+ * Helps improve agent adaptation over time
+ */
+export async function rateRecommendation(tenderId, rating, feedback, token) {
+  try {
+    const url = api('recommendations/rate');
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        tenderId,
+        rating,
+        feedback
+      })
+    });
+
+    if (!response.ok) {
+      console.warn(`Failed to rate recommendation: ${response.status}`);
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Error rating recommendation:', error);
+    return null;
+  }
+}

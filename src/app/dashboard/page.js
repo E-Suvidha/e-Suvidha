@@ -7,6 +7,9 @@ import ProfileCard from '../../components/dashboard/ProfileCard';
 import RecentActivity from '../../components/dashboard/RecentActivity';
 import DateDisplay from '../../components/common/DateDisplay';
 import DashboardStats from '../../components/dashboard/DashboardStats';
+import AgentRecommendationsExample from '../../components/AgentRecommendationsExample';
+import AgentDashboard from '../../components/dashboard/AgentDashboard';
+import AgentExplanation from '../../components/AgentExplanation';
 import { authenticatedApiCall } from '../../lib/api';
 import { recommendTenders, getRecommendationExplanation } from '../../lib/recommendationEngine';
 
@@ -108,22 +111,28 @@ export default function DashboardPage() {
 
       <DashboardStats user={user} initialTenders={tenders} initialMyBids={myBids} userProfile={userProfile} />
 
-      <section className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2">
-          <h2 className="text-xl font-semibold mb-4">Recommended Tenders for You</h2>
-          <div className="grid gap-4">
-        {recommendedList.length === 0 ? (
-              <div className="p-4 bg-white rounded">No tenders available.</div>
-            ) : (
-          recommendedList.map(t => <TenderCard key={t._id} tender={t} DateDisplay={DateDisplay} showRecommendation={true} />)
-            )}
-          </div>
+      <section className="grid grid-cols-1 gap-6">
+        {/* How the Agent Works */}
+        <div>
+          <AgentExplanation />
         </div>
 
-        <aside className="space-y-4">
-          <ProfileCard user={user} />
-          <RecentActivity activities={activities} />
-        </aside>
+        {/* AI Agent Dashboard - shows recommendation agent's reasoning and memory */}
+        <div>
+          <AgentDashboard />
+        </div>
+
+        {/* Recommendations showcase */}
+        <div>
+          <AgentRecommendationsExample />
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <aside className="lg:col-span-1 space-y-4">
+            <ProfileCard user={user} />
+            <RecentActivity activities={activities} />
+          </aside>
+        </div>
       </section>
     </>
   );

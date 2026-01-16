@@ -1,6 +1,8 @@
 /**
  * Advanced Tender Recommendation Engine
  * Matches tenders with company profiles using keyword analysis and scoring
+ * 
+ * ENHANCED: Supports agentic AI with agent preference boost from backend memory
  */
 
 // Industry-specific keyword mappings
@@ -330,4 +332,107 @@ export function getRecommendationExplanation(tender, companyProfile) {
   }
 
   return explanations.join(' • ');
+}
+/**
+ * Apply agent preference boost to existing content score
+ * 
+ * THINKING PHASE: Uses memory-based preference boost from backend agent
+ * HYBRID SCORING: Combines content score + agent preference boost
+ */
+export function applyAgentBoost(contentScore, agentBoost, agentReasoning) {
+  // Hybrid scoring formula:
+  // finalScore = contentScore + agentBoost
+  // where agentBoost is computed from persistent memory (0-0.5 max)
+  
+  const finalScore = contentScore + agentBoost;
+  
+  return {
+    contentScore,        // Original keyword-based score (0-1)
+    agentBoost,         // Memory-based boost (0-0.5)
+    finalScore: Math.min(1, finalScore), // Final hybrid score (capped at 1)
+    agentReasoning      // Explanation from agent memory
+  };
+}
+
+/**
+ * Enhanced recommendation function with agent integration
+ * 
+ * This version accepts optional agent data from backend and applies hybrid scoring
+ * while preserving the original content-based logic.
+ */
+export function recommendTendersWithAgent(scoredTenders, agentRecommendations) {
+  if (!scoredTenders || scoredTenders.length === 0) return [];
+  
+  // If no agent data available, return original scored tenders
+  if (!agentRecommendations || agentRecommendations.length === 0) {
+    return scoredTenders;
+  }
+
+  // Create a map of tender ID -> agent data for quick lookup
+  const agentDataMap = {};
+  for (const rec of agentRecommendations) {
+    agentDataMap[String(rec.tender._id)] = {
+      agentBoost: rec.agentBoost,
+      agentReasoning: rec.agentReasoning
+    };
+  }
+
+  // Apply agent boost to each tender
+  const enhancedTenders = scoredTenders.map(tender => {
+    const tenderId = String(tender._id);
+    const agentData = agentDataMap[tenderId];
+
+    if (agentData) {
+      // THINK PHASE: Compute hybrid score
+      const { contentScore, agentBoost, finalScore, agentReasoning } = 
+        applyAgentBoost(tender.recommendationScore, agentData.agentBoost, agentData.agentReasoning);
+
+      return {
+        ...tender,
+        recommendationScore: finalScore,  // Updated score
+        
+        // Extended details with agent metadata
+        recommendationDetails: {
+          ...tender.recommendationDetails,
+          contentScore,
+          agentBoost,
+          agentReasoning,
+          scoringMethod: 'hybrid (content + agent preference)'
+        }
+      };
+    }
+
+    return tender;
+  });
+
+  // Re-sort by final hybrid score
+  return enhancedTenders.sort((a, b) => b.recommendationScore - a.recommendationScore);
+}
+
+/**
+ * Enhanced explanation that includes agent reasoning
+ */
+export function getEnhancedRecommendationExplanation(tender, companyProfile) {
+  const baseExplanation = getRecommendationExplanation(tender, companyProfile);
+  
+  if (!tender.recommendationDetails) {
+    return baseExplanation;
+  }
+
+  const details = tender.recommendationDetails;
+  const explanations = baseExplanation ? [baseExplanation] : [];
+
+  // Add agent preference reasoning
+  if (details.agentReasoning) {
+    explanations.push(`Recommended based on past interaction with similar tenders: ${details.agentReasoning}`);
+  }
+
+  // Add score breakdown for transparency
+  if (details.contentScore !== undefined || details.agentBoost !== undefined) {
+    const contentScore = (details.contentScore * 100).toFixed(0);
+    const agentBoost = (details.agentBoost * 100).toFixed(0);
+    explanations.push(`[Content: ${contentScore}% + Agent memory: ${agentBoost}%]`);
+  }
+
+  return explanations.length > 0 ? explanations.join(' • ') : null;
 }

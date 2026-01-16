@@ -4,6 +4,32 @@ import Link from 'next/link';
 import BidModal from '../../components/bids/BidModal';
 import { useEffect, useState } from 'react';
 import { getRecommendationExplanation } from '../../lib/recommendationEngine';
+import { useSession } from 'next-auth/react';
+import { authenticatedApiCall } from '../../lib/api';
+
+/**
+ * Track view-details interaction with backend agent
+ * OBSERVE PHASE: Notifies agent that user clicked "View Details"
+ */
+async function trackViewDetailsClick(tenderId, session) {
+  if (!session?.accessToken || !tenderId) return;
+  
+  try {
+    await authenticatedApiCall(
+      `tenders/${tenderId}/track-interaction`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ interactionType: 'view-details' })
+      },
+      session.accessToken
+    ).catch(err => {
+      console.debug('Background tracking:', err?.message || 'Track interaction');
+    });
+  } catch (error) {
+    console.debug('Tracking not available');
+  }
+}
 
 export default function TenderCard({ tender, statusBadge, DateDisplay, showRecommendation = false, userRole = 'company', allowApply = true, showDetails = true, showStatusBadge = true, variant = 'default' }) {
   // fallback for DateDisplay if not provided
@@ -11,6 +37,7 @@ export default function TenderCard({ tender, statusBadge, DateDisplay, showRecom
   const [formattedValue, setFormattedValue] = useState(
     typeof tender.value === 'number' ? tender.value.toString() : tender.value || ''
   );
+  const { data: session } = useSession();
 
   useEffect(() => {
     if (typeof window !== 'undefined' && typeof tender.value === 'number') {
@@ -39,6 +66,11 @@ export default function TenderCard({ tender, statusBadge, DateDisplay, showRecom
     }
   }
 
+  // Handle view details click with tracking
+  const handleViewDetails = () => {
+    trackViewDetailsClick(tender._id, session);
+  };
+
   return (
     <article className={`p-6 rounded-lg ${royalClasses}`}>
       <div className="flex items-start justify-between">
@@ -63,7 +95,13 @@ export default function TenderCard({ tender, statusBadge, DateDisplay, showRecom
       
       <div className="mt-4 flex items-center gap-4">
         {showDetails && (
-          <Link href={`/tenders/${tender._id}`} className={`${variant === 'royal' ? 'bg-white/20 text-white px-3 py-2 rounded' : 'text-blue-600 underline'}`}>View details</Link>
+          <Link 
+            href={`/tenders/${tender._id}`}
+            onClick={handleViewDetails}
+            className={`${variant === 'royal' ? 'bg-white/20 text-white px-3 py-2 rounded' : 'text-blue-600 underline'}`}
+          >
+            View details
+          </Link>
         )}
         {/* Only show bid button when allowed, for non-admin users and non-awarded tenders */}
         {isApplyAllowed && userRole !== 'admin' && tender.status !== 'awarded' && <BidModal tenderId={tender._id} />}
