@@ -350,12 +350,3 @@ This project does not include an explicit license file. Add a `LICENSE` at the r
 
 Thanks to Next.js and the open-source libraries that make this stack productive.
 
----
-
-If you'd like, I can also:
-
-- add a minimal `frontend/.env.local.example` and `backend/.env.example` with recommended variables,
-- generate an OpenAPI spec skeleton for the backend routes,
-- or create a short CONTRIBUTING.md and CODE_OF_CONDUCT.md for this repo.
-
-Tell me which of the above you'd like next and I will implement it.
