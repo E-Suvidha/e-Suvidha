@@ -141,16 +141,23 @@ function calculateSkillScore(companyKeywords, tenderKeywords) {
     const companySkillMatches = companyKeywords.filter(k => skillSet.has(k));
     const tenderSkillMatches = tenderKeywords.filter(k => skillSet.has(k));
     
-    // Only match if BOTH company and tender have skill keywords
-    if (companySkillMatches.length > 0 && tenderSkillMatches.length > 0) {
+    // Match if EITHER company or tender has skill keywords (softer match than industry)
+    if (companySkillMatches.length > 0 || tenderSkillMatches.length > 0) {
+      // Boost score if both have matches
+      const hasCompanySkills = companySkillMatches.length > 0 ? 1 : 0.5;
+      const hasTenderSkills = tenderSkillMatches.length > 0 ? 1 : 0.5;
       const score = (companySkillMatches.length + tenderSkillMatches.length) / (skillKeywords.length * 2);
-      totalScore += score;
-      matchedSkills.push({
-        category: skillCategory,
-        companySkills: companySkillMatches,
-        tenderSkills: tenderSkillMatches,
-        score
-      });
+      
+      totalScore += Math.min(0.15, score * hasCompanySkills * hasTenderSkills);
+      
+      if (score > 0) {
+        matchedSkills.push({
+          category: skillCategory,
+          companySkills: companySkillMatches,
+          tenderSkills: tenderSkillMatches,
+          score
+        });
+      }
     }
   }
 
@@ -210,16 +217,10 @@ export function recommendTenders(tenders, companyProfile) {
     minLength: 3,
     maxLength: 20,
     removeStopWords: true,
-    stemWords: false // Disable stemming for now
+    stemWords: false
   });
 
   console.log('Company keywords:', companyKeywords);
-
-  // If no company keywords, return empty array (no recommendations)
-  if (companyKeywords.length === 0) {
-    console.log('No company keywords found, returning empty recommendations');
-    return [];
-  }
 
   // Score each tender
   const scoredTenders = tenders
@@ -237,7 +238,7 @@ export function recommendTenders(tenders, companyProfile) {
         minLength: 3,
         maxLength: 20,
         removeStopWords: true,
-        stemWords: false // Disable stemming for now
+        stemWords: false
       });
 
       // Calculate various scores
@@ -249,16 +250,42 @@ export function recommendTenders(tenders, companyProfile) {
 
       // Calculate final score (weighted combination)
       let finalScore = (
-        keywordOverlap * 0.4 +           // 40% - Direct keyword overlap
-        industryScore.score * 0.3 +       // 30% - Industry relevance
-        skillScore.score * 0.2 +          // 20% - Skill/technology match
-        sizeScore.score * 0.05 +          // 5% - Company size match
-        locationScore.score * 0.05        // 5% - Location match
+        keywordOverlap * 0.35 +           // 35% - Direct keyword overlap
+        industryScore.score * 0.25 +      // 25% - Industry relevance
+        skillScore.score * 0.25 +         // 25% - Skill/technology match
+        locationScore.score * 0.08 +      // 8% - Location match
+        sizeScore.score * 0.07            // 7% - Company size match
       );
 
-      // Only give base score if there's at least some keyword overlap
-      if (finalScore === 0 && keywordOverlap > 0) {
-        finalScore = 0.05; // Base score only for tenders with some keyword overlap
+      // Tiebreaker: If two tenders have same main score, use title length as differentiator
+      const titleBonus = (tender.title.split(' ').length / 100) * 0.02;
+
+      // FALLBACK SCORING: If profile has very few keywords (likely no description),
+      // give recommendations based on tender category diversity
+      // This ensures users still see recommendations even with minimal profile data
+      // HOWEVER: Always enforce industry matching - never show irrelevant industries
+      if (companyKeywords.length < 8) {
+        // Profile is minimal - use category-based fallback scoring
+        // BUT only if there's industry or skill relevance
+        if (industryScore.score > 0 || skillScore.score > 0) {
+          // Tender is relevant to company's industry - show it with base score
+          if (finalScore === 0) {
+            finalScore = 0.15; // Higher base score for relevant tenders
+          } else {
+            finalScore += 0.05; // Small boost if there's ANY match
+          }
+        }
+        // If no industry match, leave score at 0 (don't show irrelevant tenders)
+      } else {
+        // Profile has good data - use stricter scoring
+        if (finalScore === 0) {
+          // Only score if there's ANY relevance signal
+          if (industryScore.score > 0 || skillScore.score > 0) {
+            finalScore = 0.08;
+          }
+        } else {
+          finalScore += titleBonus;
+        }
       }
 
       console.log(`Tender: ${tender.title}`);
@@ -280,13 +307,16 @@ export function recommendTenders(tenders, companyProfile) {
           skillScore: skillScore.score,
           size: sizeScore.size,
           location: locationScore.location,
-          matchedKeywords: [...new Set([...companyKeywords, ...tenderKeywords])].filter(
-            keyword => companyKeywords.includes(keyword) && tenderKeywords.includes(keyword)
-          )
+          matchedKeywords: companyKeywords.length > 0
+            ? [...new Set([...companyKeywords, ...tenderKeywords])].filter(
+                keyword => companyKeywords.includes(keyword) && tenderKeywords.includes(keyword)
+              )
+            : [], // Empty if no company keywords
+          profileStrength: companyKeywords.length // Track how complete the profile is
         }
       };
     })
-    .filter(tender => tender.recommendationScore > 0.05) // More strict threshold
+    .filter(tender => tender.recommendationScore > 0) // Include all scored tenders
     .sort((a, b) => b.recommendationScore - a.recommendationScore); // Sort by score
 
   console.log('Scored tenders:', scoredTenders.map(t => ({
@@ -337,20 +367,33 @@ export function getRecommendationExplanation(tender, companyProfile) {
  * Apply agent preference boost to existing content score
  * 
  * THINKING PHASE: Uses memory-based preference boost from backend agent
- * HYBRID SCORING: Combines content score + agent preference boost
+ * HYBRID SCORING: Combines content score + agent preference boost with normalization
+ * 
+ * NORMALIZED BOOST: The agent boost is scaled relative to the content score
+ * to avoid inflating all recommendations equally
+ * - High content score + high agent boost = strong candidate
+ * - Low content score + high agent boost = modest boost
+ * - This prevents agent memory from overwhelming content-based matching
  */
 export function applyAgentBoost(contentScore, agentBoost, agentReasoning) {
-  // Hybrid scoring formula:
-  // finalScore = contentScore + agentBoost
-  // where agentBoost is computed from persistent memory (0-0.5 max)
+  // Normalized hybrid scoring formula:
+  // For each tender, scale the agent boost relative to its content score
+  // This ensures agent memory enhances differentiation rather than flattening it
   
-  const finalScore = contentScore + agentBoost;
+  // Scale agent boost by content score to normalize its impact
+  // - If content score is 0.5, boost effect is 50% of full boost
+  // - If content score is 0.1, boost effect is 10% of full boost
+  // This prevents low-matching tenders from getting unfair boosts
+  const normalizedBoost = agentBoost * contentScore;
+  
+  const finalScore = contentScore + normalizedBoost;
   
   return {
-    contentScore,        // Original keyword-based score (0-1)
-    agentBoost,         // Memory-based boost (0-0.5)
+    contentScore,              // Original keyword-based score (0-1)
+    agentBoost,                // Raw agent memory boost (0-0.5)
+    normalizedBoost,           // Scaled boost applied (contentScore * agentBoost)
     finalScore: Math.min(1, finalScore), // Final hybrid score (capped at 1)
-    agentReasoning      // Explanation from agent memory
+    agentReasoning             // Explanation from agent memory
   };
 }
 
@@ -359,6 +402,9 @@ export function applyAgentBoost(contentScore, agentBoost, agentReasoning) {
  * 
  * This version accepts optional agent data from backend and applies hybrid scoring
  * while preserving the original content-based logic.
+ * 
+ * NORMALIZATION: Agent boost is scaled by content score to prevent
+ * equal inflation of all recommendations
  */
 export function recommendTendersWithAgent(scoredTenders, agentRecommendations) {
   if (!scoredTenders || scoredTenders.length === 0) return [];
@@ -377,27 +423,28 @@ export function recommendTendersWithAgent(scoredTenders, agentRecommendations) {
     };
   }
 
-  // Apply agent boost to each tender
+  // Apply agent boost to each tender with normalization
   const enhancedTenders = scoredTenders.map(tender => {
     const tenderId = String(tender._id);
     const agentData = agentDataMap[tenderId];
 
     if (agentData) {
-      // THINK PHASE: Compute hybrid score
-      const { contentScore, agentBoost, finalScore, agentReasoning } = 
+      // THINK PHASE: Compute hybrid score with NORMALIZED boost
+      const { contentScore, agentBoost, normalizedBoost, finalScore, agentReasoning } = 
         applyAgentBoost(tender.recommendationScore, agentData.agentBoost, agentData.agentReasoning);
 
       return {
         ...tender,
-        recommendationScore: finalScore,  // Updated score
+        recommendationScore: finalScore,  // Updated score with normalized boost
         
-        // Extended details with agent metadata
+        // Extended details with agent metadata (including normalized boost)
         recommendationDetails: {
           ...tender.recommendationDetails,
           contentScore,
           agentBoost,
+          normalizedBoost,  // Store normalized boost for transparency
           agentReasoning,
-          scoringMethod: 'hybrid (content + agent preference)'
+          scoringMethod: 'hybrid (content + normalized agent preference)'
         }
       };
     }
@@ -405,7 +452,7 @@ export function recommendTendersWithAgent(scoredTenders, agentRecommendations) {
     return tender;
   });
 
-  // Re-sort by final hybrid score
+  // Re-sort by final hybrid score (which now respects content matching)
   return enhancedTenders.sort((a, b) => b.recommendationScore - a.recommendationScore);
 }
 
@@ -427,11 +474,11 @@ export function getEnhancedRecommendationExplanation(tender, companyProfile) {
     explanations.push(`Recommended based on past interaction with similar tenders: ${details.agentReasoning}`);
   }
 
-  // Add score breakdown for transparency
-  if (details.contentScore !== undefined || details.agentBoost !== undefined) {
+  // Add score breakdown for transparency (normalized)
+  if (details.contentScore !== undefined && details.normalizedBoost !== undefined) {
     const contentScore = (details.contentScore * 100).toFixed(0);
-    const agentBoost = (details.agentBoost * 100).toFixed(0);
-    explanations.push(`[Content: ${contentScore}% + Agent memory: ${agentBoost}%]`);
+    const normalizedBoost = (details.normalizedBoost * 100).toFixed(0);
+    explanations.push(`[Content: ${contentScore}% + Memory boost: ${normalizedBoost}%]`);
   }
 
   return explanations.length > 0 ? explanations.join(' • ') : null;

@@ -142,10 +142,10 @@ export default function AgentDashboard() {
               <div className="flex-1 h-2 bg-gray-200 rounded-full overflow-hidden">
                 <div
                   className="h-full bg-gradient-to-r from-blue-400 to-blue-600"
-                  style={{ width: `${Math.min(100, (memory.totalInteractions / 20) * 100)}%` }}
+                  style={{ width: `${Math.min(100, Math.round((memory.totalInteractions / 20) * 100))}%` }}
                 ></div>
               </div>
-              <span className="text-sm font-bold text-gray-700">{Math.round((memory.totalInteractions / 20) * 100)}%</span>
+              <span className="text-sm font-bold text-gray-700">{Math.min(100, Math.round((memory.totalInteractions / 20) * 100))}%</span>
             </div>
           </div>
           <div className="mt-1 text-xs text-gray-500">Based on interactions</div>

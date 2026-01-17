@@ -12,11 +12,12 @@
  */
 
 import { useSession } from 'next-auth/react';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import {
   getAgentRecommendations,
   getAgentMemory,
-  rateRecommendation
+  rateRecommendation,
+  authenticatedApiCall
 } from '@/lib/api';
 import {
   recommendTenders,
@@ -30,56 +31,107 @@ export default function AgentRecommendationsExample() {
   const [agentMemory, setAgentMemory] = useState(null);
   const [loading, setLoading] = useState(true);
   const [selectedTender, setSelectedTender] = useState(null);
+  const [userProfile, setUserProfile] = useState(null);
 
-  // Example user profile (from your authentication/profile)
-  const userProfile = {
-    name: session?.user?.name || 'User',
-    company: session?.user?.company || '',
-    description: session?.user?.description || '',
-    location: session?.user?.location || ''
-  };
-
+  // Fetch user profile data once and store it
   useEffect(() => {
-    const loadRecommendations = async () => {
-      if (!session?.accessToken) {
-        setLoading(false);
-        return;
-      }
+    if (!session?.accessToken) return;
 
+    const fetchUserProfile = async () => {
       try {
-        // STEP 1: Fetch agent recommendations (with preference boost from backend)
+        const profile = await authenticatedApiCall('auth/profile', { method: 'GET' }, session.accessToken);
+        
+        // Ensure profile has meaningful data for keyword matching
+        // If description is empty, add more context from company name and role
+        const enrichedProfile = {
+          ...profile,
+          description: profile.description || `${profile.company || ''} ${profile.role || 'company'} looking for professional services and tender opportunities`
+        };
+        
+        console.log('Enriched profile for recommendations:', enrichedProfile);
+        setUserProfile(enrichedProfile);
+      } catch (error) {
+        console.error('Error fetching user profile:', error);
+        // Fallback to session data with enriched description
+        const fallbackProfile = {
+          name: session?.user?.name || 'User',
+          company: session?.user?.company || '',
+          description: `${session?.user?.company || 'Company'} professional services company`,
+          location: session?.user?.location || '',
+          role: session?.user?.role || 'company'
+        };
+        console.log('Using fallback profile:', fallbackProfile);
+        setUserProfile(fallbackProfile);
+      }
+    };
+
+    fetchUserProfile();
+  }, [session?.accessToken, session?.user]);
+
+  // Load recommendations when userProfile and session are ready
+  useEffect(() => {
+    if (!session?.accessToken || !userProfile) {
+      setLoading(false);
+      return;
+    }
+
+    const loadRecommendations = async () => {
+      try {
+        // STEP 1: Fetch all tenders first for content-based scoring
+        const allTenders = await authenticatedApiCall('tenders', { method: 'GET' }, session.accessToken);
+
+        console.log('Fetched tenders:', allTenders.length);
+        console.log('User profile for scoring:', userProfile);
+
+        // STEP 2: Apply content-based scoring using the recommendation engine
+        const scoredTenders = recommendTenders(allTenders, userProfile);
+
+        console.log('Scored tenders:', scoredTenders.map(t => ({
+          title: t.title,
+          score: t.recommendationScore,
+          details: t.recommendationDetails
+        })));
+
+        // STEP 3: ALWAYS fetch agent recommendations, even if content scoring returns 0 tenders
+        // This ensures users with interaction history get recommendations based on their preferences
         const agentResponse = await getAgentRecommendations(session.accessToken);
 
-        if (!agentResponse) {
-          console.warn('No agent recommendations available');
-          setLoading(false);
-          return;
+        if (!agentResponse || !agentResponse.recommendations || agentResponse.recommendations.length === 0) {
+          // No agent recommendations available - fallback to content-based scores only
+          console.log('No agent recommendations available, using content-based scores');
+          setRecommendations(scoredTenders || []);
+        } else if (!scoredTenders || scoredTenders.length === 0) {
+          // FALLBACK: No content match, but user has interaction history
+          // Rank recommendations purely by agent memory boost (category preference)
+          console.log('No content match but agent has history - using agent memory boost to rank');
+          
+          const interactionBasedRecommendations = agentResponse.recommendations
+            .map(rec => ({
+              ...rec.tender,
+              recommendationScore: rec.agentBoost, // Rank purely by agent boost
+              recommendationDetails: {
+                contentScore: 0,
+                agentBoost: rec.agentBoost,
+                normalizedBoost: rec.agentBoost,
+                agentReasoning: rec.agentReasoning,
+                scoringMethod: 'agent memory boost only (no content match available)',
+                explanation: `Based on your ${rec.tender.category || 'previous'} category interactions`
+              }
+            }))
+            .sort((a, b) => b.recommendationScore - a.recommendationScore);
+          
+          setRecommendations(interactionBasedRecommendations);
+        } else {
+          // STEP 4: Apply agent boost to content-scored tenders to get hybrid scores
+          const enhancedTenders = recommendTendersWithAgent(
+            scoredTenders,
+            agentResponse.recommendations
+          );
+
+          setRecommendations(enhancedTenders);
         }
 
-        // STEP 2: Apply original content-based scoring to tenders
-        // (In real app, you'd fetch actual tenders first)
-        const scoredTenders = agentResponse.recommendations.map(rec => ({
-          ...rec.tender,
-          recommendationScore: 0.7, // Placeholder - use your actual content scoring
-          recommendationDetails: {
-            keywordOverlap: 0.5,
-            industry: rec.tender.category,
-            industryScore: 0.3,
-            skills: [],
-            skillScore: 0,
-            matchedKeywords: []
-          }
-        }));
-
-        // STEP 3: Apply agent boost to get hybrid scores
-        const enhancedTenders = recommendTendersWithAgent(
-          scoredTenders,
-          agentResponse.recommendations
-        );
-
-        setRecommendations(enhancedTenders);
-
-        // STEP 4: Load agent memory profile
+        // STEP 5: Load agent memory profile
         const memoryResponse = await getAgentMemory(session.accessToken);
         setAgentMemory(memoryResponse?.memory);
       } catch (error) {
@@ -89,8 +141,21 @@ export default function AgentRecommendationsExample() {
       }
     };
 
+    // Load recommendations immediately
     loadRecommendations();
-  }, [session?.accessToken]);
+
+    // Auto-refresh recommendations every 5 seconds to reflect memory updates from view-details clicks
+    console.log('[RECOMMENDATIONS] Setting up 5-second auto-refresh to reflect agent memory changes');
+    const pollInterval = setInterval(() => {
+      console.log('[RECOMMENDATIONS] Auto-refreshing recommendations due to potential memory updates');
+      loadRecommendations();
+    }, 5000);
+
+    return () => {
+      clearInterval(pollInterval);
+      console.log('[RECOMMENDATIONS] Cleaning up auto-refresh interval');
+    };
+  }, [session?.accessToken, userProfile]);
 
   const handleRateRecommendation = async (tenderId, rating) => {
     if (!session?.accessToken) return;
@@ -243,11 +308,13 @@ export default function AgentRecommendationsExample() {
                       'No specific reason available'}
                   </p>
                   
-                  {/* Agent Reasoning */}
+                  {/* Agent Reasoning - Shows the formula */}
                   {tender.recommendationDetails?.agentReasoning && (
-                    <p className="text-xs text-blue-700 mt-2 italic">
-                      🤖 Agent: {tender.recommendationDetails.agentReasoning}
-                    </p>
+                    <div className="text-xs text-blue-700 mt-2 italic bg-blue-50 p-2 rounded">
+                      🤖 <strong>Agent Memory Boost:</strong> {tender.recommendationDetails.agentReasoning}
+                      <br/>
+                      <span className="text-gray-600">[Content: {(tender.recommendationDetails.contentScore * 100 || 0).toFixed(0)}% + Memory boost: {(tender.recommendationDetails.agentBoost * 100).toFixed(0)}% = <strong>{(((tender.recommendationDetails.contentScore || 0) + tender.recommendationDetails.agentBoost) * 100).toFixed(0)}%</strong>]</span>
+                    </div>
                   )}
                 </div>
 

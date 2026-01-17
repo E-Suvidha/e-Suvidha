@@ -12,10 +12,14 @@ import { authenticatedApiCall } from '../../lib/api';
  * OBSERVE PHASE: Notifies agent that user clicked "View Details"
  */
 async function trackViewDetailsClick(tenderId, session) {
-  if (!session?.accessToken || !tenderId) return;
+  if (!session?.accessToken || !tenderId) {
+    console.log('Tracking skipped - no session or tenderId');
+    return;
+  }
   
   try {
-    await authenticatedApiCall(
+    console.log('Tracking view-details for tender:', tenderId);
+    const result = await authenticatedApiCall(
       `tenders/${tenderId}/track-interaction`,
       {
         method: 'POST',
@@ -23,11 +27,10 @@ async function trackViewDetailsClick(tenderId, session) {
         body: JSON.stringify({ interactionType: 'view-details' })
       },
       session.accessToken
-    ).catch(err => {
-      console.debug('Background tracking:', err?.message || 'Track interaction');
-    });
+    );
+    console.log('View-details tracked successfully:', result);
   } catch (error) {
-    console.debug('Tracking not available');
+    console.error('Error tracking view-details:', error.message);
   }
 }
 

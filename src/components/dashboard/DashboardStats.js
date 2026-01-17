@@ -62,7 +62,8 @@ export default function DashboardStats({ user, initialTenders = [], initialMyBid
     }
 
     // Use advanced recommendation engine with full profile data
-    const companyProfile = userProfile || {
+    // Prioritize userProfile if available, as it has complete data from backend
+    const companyProfile = userProfile && (userProfile.company || userProfile.name) ? userProfile : {
       name: user.name,
       company: user.company,
       description: user.description,
@@ -70,7 +71,16 @@ export default function DashboardStats({ user, initialTenders = [], initialMyBid
       role: user.role
     };
     
-    const recommendedList = recommendTenders(tenders, companyProfile);
+    // Ensure companyProfile has all required fields for recommendation engine
+    const enrichedProfile = {
+      name: companyProfile.name || user.name || 'Company',
+      company: companyProfile.company || user.company || '',
+      description: companyProfile.description || '',
+      location: companyProfile.location || user.location || '',
+      role: companyProfile.role || user.role || 'company'
+    };
+    
+    const recommendedList = recommendTenders(tenders, enrichedProfile);
     const active = (myBids || []).filter(b => !['rejected','granted'].includes((b.status || '').toLowerCase())).length;
     const deadlines = (tenders || []).filter(t => new Date(t.submissionDeadline) > new Date()).length;
     // Count tenders won by this specific user

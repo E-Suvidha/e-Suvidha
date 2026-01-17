@@ -49,8 +49,8 @@ export default function DashboardPage() {
   const recommendedList = useMemo(() => {
     if (!tenders.length) return [];
     
-    // Use detailed profile data if available, otherwise fallback to session data
-    const companyProfile = userProfile || {
+    // Ensure we have profile data with all required fields
+    const companyProfile = userProfile && (userProfile.company || userProfile.name) ? userProfile : {
       name: user.name,
       company: user.company,
       description: user.description,
@@ -58,7 +58,16 @@ export default function DashboardPage() {
       role: user.role
     };
     
-    return recommendTenders(tenders, companyProfile);
+    // Enrich profile with defaults to ensure recommendation engine works properly
+    const enrichedProfile = {
+      name: companyProfile.name || user.name || 'Company',
+      company: companyProfile.company || user.company || '',
+      description: companyProfile.description || '',
+      location: companyProfile.location || user.location || '',
+      role: companyProfile.role || user.role || 'company'
+    };
+    
+    return recommendTenders(tenders, enrichedProfile);
   }, [tenders, userProfile, user]);
 
   // Generate user-specific activities based on their bids and profile
@@ -112,10 +121,7 @@ export default function DashboardPage() {
       <DashboardStats user={user} initialTenders={tenders} initialMyBids={myBids} userProfile={userProfile} />
 
       <section className="grid grid-cols-1 gap-6">
-        {/* How the Agent Works */}
-        <div>
-          <AgentExplanation />
-        </div>
+        
 
         {/* AI Agent Dashboard - shows recommendation agent's reasoning and memory */}
         <div>
@@ -125,6 +131,10 @@ export default function DashboardPage() {
         {/* Recommendations showcase */}
         <div>
           <AgentRecommendationsExample />
+        </div>
+        {/* How the Agent Works */}
+        <div>
+          <AgentExplanation />
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
