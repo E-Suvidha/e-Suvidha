@@ -20,7 +20,10 @@ export default function DashboardPage() {
   const [userProfile, setUserProfile] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  const user = session?.user || { name: 'User', company: 'Company', location: 'Location' };
+  const user = useMemo(() => 
+    session?.user || { name: 'User', company: 'Company', location: 'Location' },
+    [session?.user]
+  );
 
   useEffect(() => {
     if (!session?.accessToken) return;
