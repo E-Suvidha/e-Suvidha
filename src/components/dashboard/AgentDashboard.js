@@ -20,8 +20,10 @@ import { authenticatedApiCall } from '@/lib/api';
 export default function AgentDashboard() {
   const { data: session } = useSession();
   const [agentData, setAgentData] = useState(null);
+  const [winProfile, setWinProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [winExplanationOpen, setWinExplanationOpen] = useState(false);
 
   const loadAgentData = useCallback(async () => {
     if (!session?.accessToken) {
@@ -31,14 +33,26 @@ export default function AgentDashboard() {
 
     try {
       setRefreshing(true);
-      const memoryResponse = await authenticatedApiCall(
-        'agent-memory',
-        { method: 'GET' },
-        session.accessToken
-      );
+
+      const [memoryResponse, winResponse] = await Promise.all([
+        authenticatedApiCall(
+          'agent-memory',
+          { method: 'GET' },
+          session.accessToken
+        ),
+        authenticatedApiCall(
+          'agent/win-profile',
+          { method: 'GET' },
+          session.accessToken
+        )
+      ]);
 
       if (memoryResponse) {
         setAgentData(memoryResponse);
+      }
+
+      if (winResponse) {
+        setWinProfile(winResponse);
       }
     } catch (error) {
       console.error('Error loading agent data:', error);
@@ -80,6 +94,12 @@ export default function AgentDashboard() {
   const memory = agentData.memory;
   const stability = parseFloat(memory.preferenceStability || 0);
   const diversification = parseFloat(memory.diversificationRatio || 0);
+
+  const winAvg = winProfile?.userAverageWinProb || 0;
+  const winGlobal = winProfile?.globalWinRate || 0;
+  const winTenders = winProfile?.tenders || [];
+  const winTotalPublished = winProfile?.totalPublishedCount ?? winProfile?.sampleCount ?? 0;
+  const winProbSum = winTenders.reduce((s, t) => s + (t.winProbability || 0), 0) || 1;
 
   return (
     <div className="space-y-4">
@@ -248,17 +268,118 @@ export default function AgentDashboard() {
           </div>
         </div>
       </div>
+      {/* Win Likelihood: donut chart by tender (name + color key + %) */}
+      {winProfile && (
+        <div className="p-4 bg-white rounded-lg border border-gray-200 shadow-sm">
+          <h3 className="font-semibold text-gray-900 mb-4">📈 Win Likelihood</h3>
 
-      {/* How It Works */}
-      <div className="p-4 bg-indigo-50 rounded-lg border border-indigo-200">
-        <h3 className="font-semibold text-indigo-900 mb-2">💭 How the Agent Works</h3>
-        <ul className="text-sm text-indigo-800 space-y-1">
-          <li>✅ <strong>Observes:</strong> Tracks your tender views, details clicks, and bid submissions</li>
-          <li>🧠 <strong>Thinks:</strong> Analyzes your preferences and sets adaptive goals</li>
-          <li>🎯 <strong>Acts:</strong> Ranks tenders based on learned preferences and current goal</li>
-          <li>📈 <strong>Adapts:</strong> Continuously learns from your interactions</li>
-        </ul>
-      </div>
+          <div className="flex flex-col md:flex-row items-center gap-6">
+            {/* Donut chart (perimeter ring, slices = tenders by win probability) */}
+            <div className="relative w-44 h-44 shrink-0">
+              <svg viewBox="0 0 120 120" className="w-full h-full">
+                {winTenders.length > 0 && (() => {
+                  const cx = 60;
+                  const cy = 60;
+                  const rOuter = 50;
+                  const rInner = 28;
+                  const colors = ['#4f46e5', '#22c55e', '#f97316', '#e11d48', '#06b6d4', '#8b5cf6', '#ec4899', '#14b8a6', '#eab308', '#ef4444', '#3b82f6', '#84cc16'];
+                  let cumulative = 0;
+
+                  return winTenders.map((t, idx) => {
+                    const portion = (t.winProbability || 0) / winProbSum;
+                    if (portion <= 0) return null;
+                    const startAngle = cumulative * 2 * Math.PI - Math.PI / 2;
+                    const endAngle = (cumulative + portion) * 2 * Math.PI - Math.PI / 2;
+                    cumulative += portion;
+
+                    const x1o = cx + rOuter * Math.cos(startAngle);
+                    const y1o = cy + rOuter * Math.sin(startAngle);
+                    const x2o = cx + rOuter * Math.cos(endAngle);
+                    const y2o = cy + rOuter * Math.sin(endAngle);
+                    const x1i = cx + rInner * Math.cos(startAngle);
+                    const y1i = cy + rInner * Math.sin(startAngle);
+                    const x2i = cx + rInner * Math.cos(endAngle);
+                    const y2i = cy + rInner * Math.sin(endAngle);
+                    const largeArc = portion > 0.5 ? 1 : 0;
+                    const d = `M ${x1o} ${y1o} A ${rOuter} ${rOuter} 0 ${largeArc} 1 ${x2o} ${y2o} L ${x2i} ${y2i} A ${rInner} ${rInner} 0 ${largeArc} 0 ${x1i} ${y1i} Z`;
+                    return (
+                      <path key={t.tenderId || idx} d={d} fill={colors[idx % colors.length]} />
+                    );
+                  });
+                })()}
+              </svg>
+              <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                <span className="text-xs text-gray-500">Avg</span>
+                <span className="text-lg font-bold text-gray-900">{(winAvg * 100).toFixed(0)}%</span>
+              </div>
+            </div>
+
+            {/* Legend: tender name + color key + win % */}
+            <div className="flex-1 min-w-0 space-y-2">
+              {winTenders.length > 0 ? (
+                <>
+                  {winTenders.map((t, idx) => {
+                    const pct = (t.winProbability ?? 0) * 100;
+                    const color = ['#4f46e5', '#22c55e', '#f97316', '#e11d48', '#06b6d4', '#8b5cf6', '#ec4899', '#14b8a6', '#eab308', '#ef4444', '#3b82f6', '#84cc16'][idx % 12];
+                    const title = (t.title || t.tenderId || 'Tender').slice(0, 40);
+                    return (
+                      <div key={t.tenderId || idx} className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="w-3 h-3 rounded-sm shrink-0" style={{ backgroundColor: color }} />
+                          <span className="text-[11px] text-gray-700 truncate" title={t.title || t.tenderId}>{title}</span>
+                        </div>
+                        <span className="text-[11px] text-gray-800 font-semibold shrink-0">
+                          {Number.isFinite(pct) ? `${pct.toFixed(0)}%` : '—'}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  <div className="pt-1 text-[10px] text-gray-400">
+                    {winTotalPublished} published tenders · Top {winTenders.length} shown
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-gray-500">
+                  No published tenders yet. Win likelihood will appear here when tenders with status &quot;open&quot; are available.
+                </p>
+              )}
+              <div className="text-[10px] text-gray-400">
+                All users win rate: {(winGlobal * 100).toFixed(0)}%
+              </div>
+            </div>
+          </div>
+
+          {/* Collapsible: why recommendations and win likelihood are shown this way */}
+          <div className="mt-4 border-t border-gray-200 pt-4">
+            <button
+              type="button"
+              onClick={() => setWinExplanationOpen((o) => !o)}
+              className="flex items-center gap-2 w-full text-left text-sm font-medium text-gray-700 hover:text-gray-900 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 rounded px-1 py-0.5"
+              aria-expanded={winExplanationOpen}
+            >
+              <span className="text-gray-500" aria-hidden>
+                {winExplanationOpen ? '▼' : '▶'}
+              </span>
+              Why are recommendations and win likelihood shown like this?
+            </button>
+            {winExplanationOpen && (
+              <div className="mt-3 pl-5 text-sm text-gray-600 space-y-2">
+                <p>
+                  <strong>Win likelihood</strong> is estimated from historical bid outcomes, not from clicks or guesses.
+                  When enough past bids exist, a small model is trained to predict the chance that a bid will be granted.
+                  It uses: your overall win rate, how well you do in this tender&apos;s category, how similar this tender is to ones you&apos;ve won (using semantic embeddings), and platform-wide win rates.
+                </p>
+                <p>
+                  <strong>Recommendations</strong> use the same signals—your preferences, categories, and past engagement—and rank tenders by both relevance and win likelihood so you see opportunities that fit you and have a realistic chance of success.
+                </p>
+                <p className="text-xs text-gray-500">
+                  If no trained model exists yet (e.g. little historical data), a simple rule-based estimate is used until more data is available.
+                </p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
